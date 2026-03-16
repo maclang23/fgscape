@@ -9,13 +9,19 @@ import difflib
 from espn_api.baseball import League
 
 st.set_page_config(page_title="MLB Roster Exporter", page_icon="⚾", layout="wide")
-st.title("⚾ Ultimate Fantasy Baseball Scraper & Merger")
+st.title("⚾ Fantasy Baseball Scraper & Merger")
 
 # --- INITIALIZE SESSION STATE ---
 if 'step' not in st.session_state:
     st.session_state.step = 1
 if 'consensus_df' not in st.session_state:
     st.session_state.consensus_df = None
+if 'raw_preview_df' not in st.session_state:
+    st.session_state.raw_preview_df = None
+if 'raw_preview_title' not in st.session_state:
+    st.session_state.raw_preview_title = ""
+if 'raw_excel_data' not in st.session_state:
+    st.session_state.raw_excel_data = None
 if 'espn_rosters' not in st.session_state:
     st.session_state.espn_rosters = []
 if 'espn_fa' not in st.session_state:
@@ -135,7 +141,7 @@ else:
 # ==========================================
 st.header("Step 1: Get Projections")
 
-if st.button("🚀 Scrape FanGraphs", type="primary" if st.session_state.step == 1 else "secondary"):
+if st.button("Scrape FanGraphs", type="primary" if st.session_state.step == 1 else "secondary"):
     if not active_projections:
         st.error("Select at least one projection system.")
     else:
@@ -211,6 +217,8 @@ if st.button("🚀 Scrape FanGraphs", type="primary" if st.session_state.step ==
                     
                     raw_df = df.copy()
                     raw_df['System'] = proj.upper()
+                    
+                    dfs_to_save[proj] = df
                     all_raw_data.append(raw_df)
                     
                 except Exception as e:
@@ -244,11 +252,42 @@ if st.button("🚀 Scrape FanGraphs", type="primary" if st.session_state.step ==
                 consensus_df = consensus_df.sort_values(by='Total_PR', ascending=False)
                 
                 st.session_state.consensus_df = consensus_df
+                dfs_to_save['Consensus'] = consensus_df
+                
+                # Setup Raw Preview & Excel Export
+                if not consensus_df.empty:
+                    st.session_state.raw_preview_df = consensus_df.head(10)
+                    st.session_state.raw_preview_title = "Top 10 Consensus Preview"
+                else:
+                    st.session_state.raw_preview_df = dfs_to_save[active_projections[0]].head(10)
+                    st.session_state.raw_preview_title = f"Top 10 {active_projections[0].upper()} Preview"
+
+                excel_buffer = io.BytesIO()
+                with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                    if 'Consensus' in dfs_to_save and not dfs_to_save['Consensus'].empty:
+                        dfs_to_save['Consensus'].to_excel(writer, sheet_name='Consensus', index=False)
+                    for proj, df in dfs_to_save.items():
+                        if proj != 'Consensus' and not df.empty:
+                            df.to_excel(writer, sheet_name=proj, index=False)
+                
+                st.session_state.raw_excel_data = excel_buffer.getvalue()
                 st.session_state.step = 2
-                st.success("✅ FanGraphs Projections Loaded! Proceed to Step 2.")
+                st.success("✅ FanGraphs Projections Loaded! You can download the raw data below, or proceed to Step 2 to sync with ESPN.")
             else:
                 st.error("Failed to scrape FanGraphs data.")
 
+# --- Show Step 1 Results & Download ---
+if st.session_state.raw_preview_df is not None:
+    st.subheader(f"{st.session_state.raw_preview_title}")
+    st.dataframe(st.session_state.raw_preview_df, use_container_width=True, hide_index=True)
+    
+if st.session_state.raw_excel_data is not None:
+    st.download_button(
+        label="📥 Download Raw FanGraphs Excel",
+        data=st.session_state.raw_excel_data,
+        file_name=f"Raw_FanGraphs_{player_type.lower()}_projections.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
 # ==========================================
 # STEP 2: FETCH ESPN & AUTO-MATCH
@@ -257,7 +296,7 @@ st.divider()
 st.header("Step 2: Sync ESPN & Match Players")
 
 if st.session_state.consensus_df is not None:
-    if st.button("📡 Pull ESPN Rosters & Auto-Match", type="primary" if st.session_state.step == 2 else "secondary"):
+    if st.button("Pull ESPN Rosters & Auto-Match", type="primary" if st.session_state.step == 2 else "secondary"):
         try:
             with st.spinner("Connecting to ESPN..."):
                 league = League(league_id=league_id, year=year, espn_s2=espn_s2, swid=swid)
@@ -296,7 +335,7 @@ if st.session_state.consensus_df is not None:
                 st.session_state.espn_fa = espn_fa
                 st.session_state.master_list = master_list
 
-            with st.spinner("Fuzzy Matching Players..."):
+            with st.spinner("Executing Intelligent Matching..."):
                 fg_df = st.session_state.consensus_df
                 fg_records = fg_df.to_dict('records')
                 for p in fg_records: p['norm_name'] = normalize_name(p['PlayerName'])
@@ -317,26 +356,32 @@ if st.session_state.consensus_df is not None:
                         julios = [p for p in fg_records if "julio rodriguez" in p['norm_name']]
                         if julios:
                             if 'C' in ep['Eligible Positions']:
-                                match = min(julios, key=lambda x: x['Total_PR']) # Catcher Julio (Lower PR)
+                                match = min(julios, key=lambda x: x['Total_PR']) # Catcher Julio
                             else:
-                                match = max(julios, key=lambda x: x['Total_PR']) # OF Julio (Higher PR)
+                                match = max(julios, key=lambda x: x['Total_PR']) # OF Julio
                             matches[ep_name] = match['playerid']
                             continue
 
-                    # 2. Exact Normalized Match
-                    exacts = [p for p in fg_records if p['norm_name'] == ep_norm]
-                    if len(exacts) == 1:
-                        matches[ep_name] = exacts[0]['playerid']
+                    # 2. Pass 1: Direct Exact Match (Case-Sensitive)
+                    exact_raw = [p for p in fg_records if p['PlayerName'] == ep_name]
+                    if len(exact_raw) == 1:
+                        matches[ep_name] = exact_raw[0]['playerid']
                         continue
                         
-                    # 3. Fuzzy Match Backup
-                    closest = difflib.get_close_matches(ep_norm, fg_names_list, n=3, cutoff=0.7)
+                    # 3. Pass 2: Exact Normalized Match
+                    exact_norm = [p for p in fg_records if p['norm_name'] == ep_norm]
+                    if len(exact_norm) == 1:
+                        matches[ep_name] = exact_norm[0]['playerid']
+                        continue
+                        
+                    # 4. Pass 3: Strict Fuzzy Match (Cutoff elevated to 85% to prevent bad guesses)
+                    closest = difflib.get_close_matches(ep_norm, fg_names_list, n=1, cutoff=0.85)
                     if closest:
                         best_fg = fg_names_map[closest[0]]
                         matches[ep_name] = best_fg['playerid']
                     else:
-                        # Failed to find a good auto-match, queue for manual review
-                        guesses = difflib.get_close_matches(ep_norm, fg_names_list, n=5, cutoff=0.4)
+                        # 5. Fallback: Manual Review Queue
+                        guesses = difflib.get_close_matches(ep_norm, fg_names_list, n=5, cutoff=0.5)
                         guess_real_names = [fg_names_map[g]['PlayerName'] for g in guesses]
                         unmatched.append({
                             "espn_name": ep_name,
@@ -347,7 +392,7 @@ if st.session_state.consensus_df is not None:
                 st.session_state.matches = matches
                 st.session_state.unmatched = unmatched
                 st.session_state.step = 3
-                st.success("✅ Matching Complete!")
+                st.success("✅ Matching Complete! Scroll down to review and export.")
 
         except Exception as e:
             st.error("Error connecting to ESPN.")
@@ -363,7 +408,7 @@ if st.session_state.step >= 3:
     fg_df = st.session_state.consensus_df
     
     if st.session_state.unmatched:
-        st.warning(f"⚠️ {len(st.session_state.unmatched)} players could not be auto-matched. Please confirm closest guesses below:")
+        st.warning(f"⚠️ {len(st.session_state.unmatched)} players could not be auto-matched perfectly. Please confirm closest guesses below:")
         
         with st.form("manual_match_form"):
             manual_selections = {}
@@ -376,21 +421,19 @@ if st.session_state.step >= 3:
             submitted = st.form_submit_button("Confirm Matches & Build Excel")
             
             if submitted:
-                # Update matches dict with manual choices
                 for espn_name, fg_choice in manual_selections.items():
                     if fg_choice != "Skip/Leave Blank":
                         fg_id = fg_df[fg_df['PlayerName'] == fg_choice]['playerid'].values[0]
                         st.session_state.matches[espn_name] = fg_id
-                st.session_state.unmatched = [] # Clear queue
-                st.rerun() # Refresh to hide the form
+                st.session_state.unmatched = [] 
+                st.rerun() 
     else:
-        st.success("🎉 All players successfully matched!")
+        st.success("🎉 All ESPN players have been accounted for!")
         
-        if st.button("💾 Generate Final Excel File", type="primary"):
-            with st.spinner("Building Excel Database..."):
+        if st.button("💾 Generate ESPN Merged Excel File", type="primary"):
+            with st.spinner("Building Final Merged Database..."):
                 output = io.BytesIO()
                 
-                # Merge logic function
                 def merge_projections(dict_list):
                     merged_list = []
                     for item in dict_list:
@@ -398,40 +441,35 @@ if st.session_state.step >= 3:
                         fg_id = st.session_state.matches.get(item['ESPN_Name'])
                         if fg_id:
                             fg_row = fg_df[fg_df['playerid'] == fg_id].to_dict('records')[0]
-                            # Add stats dynamically
                             for col in stats_to_zscore + [f"PR_{s}" for s in stats_to_zscore] + ['Total_PR']:
                                 new_row[col] = fg_row.get(col, 0.0)
                         merged_list.append(new_row)
                     return pd.DataFrame(merged_list)
 
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    # 1. Teams
                     df_all_rosters = merge_projections(st.session_state.espn_rosters)
                     for team_name, group in df_all_rosters.groupby("Fantasy Team"):
                         clean_sheet = re.sub(r'[\\/*?:\[\]]', '', team_name)[:31]
                         group.to_excel(writer, sheet_name=clean_sheet, index=False)
                         auto_adjust_column_width(writer, group, clean_sheet)
 
-                    # 2. Free Agents
                     df_fa = merge_projections(st.session_state.espn_fa)
-                    df_fa = df_fa.sort_values(by='Total_PR', ascending=False)
+                    if 'Total_PR' in df_fa.columns: df_fa = df_fa.sort_values(by='Total_PR', ascending=False)
                     df_fa.to_excel(writer, sheet_name="Top Free Agents", index=False)
                     auto_adjust_column_width(writer, df_fa, "Top Free Agents")
 
-                    # 3. Master List
                     df_master = merge_projections(st.session_state.master_list)
-                    df_master = df_master.sort_values(by='Total_PR', ascending=False)
+                    if 'Total_PR' in df_master.columns: df_master = df_master.sort_values(by='Total_PR', ascending=False)
                     df_master.to_excel(writer, sheet_name="Master League List", index=False)
                     auto_adjust_column_width(writer, df_master, "Master League List")
 
-                st.session_state.excel_data = output.getvalue()
+                st.session_state.final_excel_data = output.getvalue()
                 st.balloons()
 
-    # Download Button
-    if 'excel_data' in st.session_state:
+    if 'final_excel_data' in st.session_state:
         st.download_button(
-            label="📥 Download Ultimate Roster Export",
-            data=st.session_state.excel_data,
+            label="📥 Download ESPN Merged Export",
+            data=st.session_state.final_excel_data,
             file_name=f"Fantasy_Rosters_With_Projections_{year}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
