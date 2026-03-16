@@ -57,7 +57,7 @@ st.header("⚙️ Configuration")
 st.subheader("1. FanGraphs Settings")
 col1, col2, col3 = st.columns(3)
 with col1:
-    player_type = st.radio("Player Type:", ["Batters", "Pitchers", "Combined"], horizontal=True)
+    player_type = st.radio("Player Type:", ["Combined","Batters", "Pitchers"], horizontal=True)
 with col2:
     num_players = st.number_input("Players to Return (Per Type):", min_value=10, max_value=1000, value=400, step=10)
 with col3:
