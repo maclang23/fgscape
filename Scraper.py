@@ -9,7 +9,7 @@ import difflib
 from espn_api.baseball import League
 
 st.set_page_config(page_title="MLB Roster Exporter", page_icon="⚾", layout="wide")
-st.title("⚾ Fantasy Baseball Scraper & Merger")
+st.title("⚾ Ultimate Fantasy Baseball Scraper & Merger")
 
 # --- INITIALIZE SESSION STATE ---
 if 'step' not in st.session_state:
@@ -58,10 +58,9 @@ st.header("⚙️ Configuration")
 st.subheader("1. FanGraphs Settings")
 col1, col2, col3 = st.columns(3)
 with col1:
-    player_type = st.radio("Player Type:", ["Batters", "Pitchers"], horizontal=True)
-    is_pitcher = player_type == "Pitchers"
+    player_type = st.radio("Player Type:", ["Batters", "Pitchers", "Combined"], horizontal=True)
 with col2:
-    num_players = st.number_input("Players to Return:", min_value=10, max_value=1000, value=400, step=10)
+    num_players = st.number_input("Players to Return (Per Type):", min_value=10, max_value=1000, value=400, step=10)
 with col3:
     min_systems = st.number_input("Min Systems for Consensus:", min_value=1, max_value=8, value=2)
 
@@ -77,15 +76,17 @@ with pc3:
     use_atc = st.checkbox("ATC", value=True)
     use_oopsy = st.checkbox("OOPSY", value=True)
 with pc4:
-    if is_pitcher:
+    if player_type == "Pitchers":
         use_zips = st.checkbox("ZiPS", value=False, disabled=True)
         use_zipsdc = st.checkbox("ZiPS DC", value=False, disabled=True)
     else:
         use_zips = st.checkbox("ZiPS", value=True)
         use_zipsdc = st.checkbox("ZiPS DC", value=True)
 
-if is_pitcher:
+if player_type == "Pitchers":
     st.caption("⚠️ *ZiPS and ZiPS DC do not project Quality Starts (QS) and are disabled for Pitchers.*")
+elif player_type == "Combined":
+    st.caption("⚠️ *ZiPS and ZiPS DC do not project Quality Starts. In Combined mode, they are only fetched for Batters.*")
 
 # --- ESPN Settings ---
 st.subheader("2. ESPN Settings")
@@ -115,7 +116,6 @@ else:
 
 st.divider()
 
-# --- Logic Maps ---
 proj_map = {
     'steamer': use_steamer, 'fangraphsdc': use_fangraphsdc, 
     'thebat': use_thebat, 'thebatx': use_thebatx, 
@@ -124,40 +124,48 @@ proj_map = {
 }
 active_projections = [proj for proj, is_active in proj_map.items() if is_active]
 
-if is_pitcher:
-    stat_type = "pit"
-    stats_to_keep = ['W', 'QS', 'SO', 'ERA', 'WHIP']
-    stats_to_zscore = ['W', 'QS', 'SO', 'ERA', 'WHIP', 'SVHLD']
-    final_cols = ['PlayerName', 'Team', 'playerid', 'W', 'QS', 'SO', 'ERA', 'WHIP', 'SVHLD']
-else:
-    stat_type = "bat"
-    stats_to_keep = ['R', 'HR', 'RBI', 'SB', 'OBP', 'SLG']
-    stats_to_zscore = ['R', 'HR', 'RBI', 'SB', 'OBP', 'SLG']
-    final_cols = ['PlayerName', 'Team', 'playerid', 'R', 'HR', 'RBI', 'SB', 'OBP', 'SLG']
-
-
 # ==========================================
 # STEP 1: SCRAPE FANGRAPHS
 # ==========================================
 st.header("Step 1: Get Projections")
 
-if st.button("Scrape FanGraphs", type="primary" if st.session_state.step == 1 else "secondary"):
+if st.button("🚀 Scrape FanGraphs", type="primary" if st.session_state.step == 1 else "secondary"):
     if not active_projections:
         st.error("Select at least one projection system.")
     else:
-        with st.spinner(f"Fetching {player_type} projections..."):
-            dfs_to_save = {}
-            all_raw_data = []
+        status_text = st.empty()
+        
+        # Determine which datasets to pull
+        modes_to_run = ['bat', 'pit'] if player_type == "Combined" else (['bat'] if player_type == "Batters" else ['pit'])
+        all_dfs_by_mode = {'bat': {}, 'pit': {}}
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json",
+            "Referer": "https://www.fangraphs.com/projections"
+        }
+
+        for mode in modes_to_run:
+            mode_display = "Batters" if mode == 'bat' else "Pitchers"
             
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Accept": "application/json",
-                "Referer": "https://www.fangraphs.com/projections"
-            }
-            
+            if mode == 'pit':
+                stats_to_keep = ['W', 'QS', 'SO', 'ERA', 'WHIP']
+                stats_to_zscore = ['W', 'QS', 'SO', 'ERA', 'WHIP', 'SVHLD']
+                final_cols = ['PlayerName', 'Team', 'playerid', 'Type', 'W', 'QS', 'SO', 'ERA', 'WHIP', 'SVHLD']
+            else:
+                stats_to_keep = ['R', 'HR', 'RBI', 'SB', 'OBP', 'SLG']
+                stats_to_zscore = ['R', 'HR', 'RBI', 'SB', 'OBP', 'SLG']
+                final_cols = ['PlayerName', 'Team', 'playerid', 'Type', 'R', 'HR', 'RBI', 'SB', 'OBP', 'SLG']
+
+            all_raw_data_mode = []
+
             for proj in active_projections:
+                if mode == 'pit' and proj in ['zips', 'zipsdc']:
+                    continue # Skip for pitchers
+                
+                status_text.info(f"⏳ Fetching {mode_display} data from {proj.upper()}...")
                 url = "https://www.fangraphs.com/api/projections"
-                params = {"type": proj, "stats": stat_type, "pos": "all", "team": "0", "players": "0", "lg": "all", "statgroup": "fantasy", "fantasypreset": "classic"}
+                params = {"type": proj, "stats": mode, "pos": "all", "team": "0", "players": "0", "lg": "all", "statgroup": "fantasy", "fantasypreset": "classic"}
                 
                 try:
                     response = requests.get(url, params=params, headers=headers, timeout=15)
@@ -179,7 +187,7 @@ if st.button("Scrape FanGraphs", type="primary" if st.session_state.step == 1 el
                     for id_var in ['playerid', 'id']:
                         if id_var in col_map: rename_dict[col_map[id_var]] = 'playerid'; break
                     
-                    for stat in stats_to_keep + (['SV', 'HLD'] if is_pitcher else []):
+                    for stat in stats_to_keep + (['SV', 'HLD'] if mode == 'pit' else []):
                         if stat.lower() in col_map: rename_dict[col_map[stat.lower()]] = stat
                             
                     df.rename(columns=rename_dict, inplace=True)
@@ -188,11 +196,12 @@ if st.button("Scrape FanGraphs", type="primary" if st.session_state.step == 1 el
                     if 'Team' not in df.columns: df['Team'] = "FA"
                     
                     df = df.head(int(num_players))
+                    df['Type'] = "Batter" if mode == 'bat' else "Pitcher"
                     
                     for col in stats_to_keep:
                         if col not in df.columns: df[col] = 0.0
                             
-                    if is_pitcher:
+                    if mode == 'pit':
                         for col in ['SV', 'HLD']:
                             if col not in df.columns: df[col] = 0.0
                         df['SVHLD'] = df['SV'] + df['HLD']
@@ -208,7 +217,7 @@ if st.button("Scrape FanGraphs", type="primary" if st.session_state.step == 1 el
                         if pd.isna(std_dev) or std_dev == 0:
                             df[z_col] = 0.0
                         else:
-                            if is_pitcher and stat in ['ERA', 'WHIP']:
+                            if mode == 'pit' and stat in ['ERA', 'WHIP']:
                                 df[z_col] = (df[stat].mean() - df[stat]) / std_dev
                             else:
                                 df[z_col] = (df[stat] - df[stat].mean()) / std_dev
@@ -218,16 +227,18 @@ if st.button("Scrape FanGraphs", type="primary" if st.session_state.step == 1 el
                     raw_df = df.copy()
                     raw_df['System'] = proj.upper()
                     
-                    dfs_to_save[proj] = df
-                    all_raw_data.append(raw_df)
+                    all_dfs_by_mode[mode][proj] = df
+                    all_raw_data_mode.append(raw_df)
                     
                 except Exception as e:
-                    st.error(f"Error fetching {proj}: {e}")
+                    st.error(f"Error fetching {proj} for {mode_display}: {e}")
 
-            if all_raw_data:
-                combined_df = pd.concat(all_raw_data)
+            # Build Consensus strictly for this mode
+            if all_raw_data_mode:
+                combined_df = pd.concat(all_raw_data_mode)
                 agg_rules = {stat: 'mean' for stat in stats_to_zscore}
                 agg_rules['Team'] = 'first'
+                agg_rules['Type'] = 'first'
                 agg_rules['System'] = lambda x: ', '.join(x)
                 
                 consensus_df = combined_df.groupby(['playerid', 'PlayerName'], as_index=False).agg(agg_rules)
@@ -243,42 +254,60 @@ if st.button("Scrape FanGraphs", type="primary" if st.session_state.step == 1 el
                     if pd.isna(std_dev) or std_dev == 0:
                         consensus_df[z_col] = 0.0
                     else:
-                        if is_pitcher and stat in ['ERA', 'WHIP']:
+                        if mode == 'pit' and stat in ['ERA', 'WHIP']:
                             consensus_df[z_col] = (consensus_df[stat].mean() - consensus_df[stat]) / std_dev
                         else:
                             consensus_df[z_col] = (consensus_df[stat] - consensus_df[stat].mean()) / std_dev
 
                 consensus_df['Total_PR'] = consensus_df[pr_columns].sum(axis=1)
-                consensus_df = consensus_df.sort_values(by='Total_PR', ascending=False)
-                
-                st.session_state.consensus_df = consensus_df
-                dfs_to_save['Consensus'] = consensus_df
-                
-                # Setup Raw Preview & Excel Export
-                if not consensus_df.empty:
-                    st.session_state.raw_preview_df = consensus_df.head(10)
-                    st.session_state.raw_preview_title = "Top 10 Consensus Preview"
-                else:
-                    st.session_state.raw_preview_df = dfs_to_save[active_projections[0]].head(10)
-                    st.session_state.raw_preview_title = f"Top 10 {active_projections[0].upper()} Preview"
+                all_dfs_by_mode[mode]['Consensus'] = consensus_df
 
-                excel_buffer = io.BytesIO()
-                with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                    if 'Consensus' in dfs_to_save and not dfs_to_save['Consensus'].empty:
-                        dfs_to_save['Consensus'].to_excel(writer, sheet_name='Consensus', index=False)
-                    for proj, df in dfs_to_save.items():
-                        if proj != 'Consensus' and not df.empty:
-                            df.to_excel(writer, sheet_name=proj, index=False)
-                
-                st.session_state.raw_excel_data = excel_buffer.getvalue()
-                st.session_state.step = 2
-                st.success("✅ FanGraphs Projections Loaded! You can download the raw data below, or proceed to Step 2 to sync with ESPN.")
+        # --- MERGE BATTERS AND PITCHERS ---
+        dfs_to_save = {}
+        all_keys = set(list(all_dfs_by_mode['bat'].keys()) + list(all_dfs_by_mode['pit'].keys()))
+        
+        for k in all_keys:
+            pieces = []
+            if 'bat' in all_dfs_by_mode and k in all_dfs_by_mode['bat'] and not all_dfs_by_mode['bat'][k].empty:
+                pieces.append(all_dfs_by_mode['bat'][k])
+            if 'pit' in all_dfs_by_mode and k in all_dfs_by_mode['pit'] and not all_dfs_by_mode['pit'][k].empty:
+                pieces.append(all_dfs_by_mode['pit'][k])
+            
+            if pieces:
+                merged = pd.concat(pieces, ignore_index=True)
+                merged = merged.fillna('') # Fills missing stats (e.g., Pitcher HRs) with blanks for clean Excel
+                if 'Total_PR' in merged.columns:
+                    merged = merged.sort_values(by='Total_PR', ascending=False)
+                dfs_to_save[k] = merged
+
+        if dfs_to_save:
+            st.session_state.consensus_df = dfs_to_save.get('Consensus', pd.DataFrame())
+            
+            if not st.session_state.consensus_df.empty:
+                st.session_state.raw_preview_df = st.session_state.consensus_df.head(10)
+                st.session_state.raw_preview_title = "Top 10 Consensus Preview"
             else:
-                st.error("Failed to scrape FanGraphs data.")
+                first_key = list(dfs_to_save.keys())[0]
+                st.session_state.raw_preview_df = dfs_to_save[first_key].head(10)
+                st.session_state.raw_preview_title = f"Top 10 {first_key.upper()} Preview"
+
+            excel_buffer = io.BytesIO()
+            with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                if 'Consensus' in dfs_to_save and not dfs_to_save['Consensus'].empty:
+                    dfs_to_save['Consensus'].to_excel(writer, sheet_name='Consensus', index=False)
+                for proj, df in dfs_to_save.items():
+                    if proj != 'Consensus' and not df.empty:
+                        df.to_excel(writer, sheet_name=proj, index=False)
+            
+            st.session_state.raw_excel_data = excel_buffer.getvalue()
+            st.session_state.step = 2
+            status_text.success("✅ FanGraphs Projections Loaded! Download raw data below, or proceed to Step 2.")
+        else:
+            status_text.error("Failed to scrape FanGraphs data.")
 
 # --- Show Step 1 Results & Download ---
 if st.session_state.raw_preview_df is not None:
-    st.subheader(f"{st.session_state.raw_preview_title}")
+    st.subheader(f"👀 {st.session_state.raw_preview_title}")
     st.dataframe(st.session_state.raw_preview_df, use_container_width=True, hide_index=True)
     
 if st.session_state.raw_excel_data is not None:
@@ -296,7 +325,7 @@ st.divider()
 st.header("Step 2: Sync ESPN & Match Players")
 
 if st.session_state.consensus_df is not None:
-    if st.button("Pull ESPN Rosters & Auto-Match", type="primary" if st.session_state.step == 2 else "secondary"):
+    if st.button("📡 Pull ESPN Rosters & Auto-Match", type="primary" if st.session_state.step == 2 else "secondary"):
         try:
             with st.spinner("Connecting to ESPN..."):
                 league = League(league_id=league_id, year=year, espn_s2=espn_s2, swid=swid)
@@ -306,9 +335,17 @@ if st.session_state.consensus_df is not None:
                 espn_rosters = []
                 master_list = []
                 
+                def matches_selected_type(player_slots):
+                    if player_type == "Combined": return True
+                    pitching_slots = {'SP', 'RP', 'P'}
+                    is_espn_pitcher = any(s in pitching_slots for s in player_slots)
+                    return is_espn_pitcher if player_type == "Pitchers" else not is_espn_pitcher
+
                 # Fetch Rosters
                 for team in league.teams:
                     for player in team.roster:
+                        if not matches_selected_type(player.eligibleSlots): continue
+                            
                         clean_slots = [s for s in player.eligibleSlots if s not in excluded_slots]
                         p_info = {
                             "ESPN_Name": player.name, "Fantasy Team": team.team_name,
@@ -322,6 +359,8 @@ if st.session_state.consensus_df is not None:
                 free_agents = league.free_agents(size=500)
                 espn_fa = []
                 for player in free_agents:
+                    if not matches_selected_type(player.eligibleSlots): continue
+                        
                     clean_slots = [s for s in player.eligibleSlots if s not in excluded_slots]
                     p_info = {
                         "ESPN_Name": player.name, "Fantasy Team": "Free Agent",
@@ -351,36 +390,31 @@ if st.session_state.consensus_df is not None:
                     ep_norm = normalize_name(ep_name)
                     ep_team = ep['Pro Team']
                     
-                    # 1. Julio Rodriguez Exception
                     if "julio rodriguez" in ep_norm and ep_team == "SEA":
                         julios = [p for p in fg_records if "julio rodriguez" in p['norm_name']]
                         if julios:
                             if 'C' in ep['Eligible Positions']:
-                                match = min(julios, key=lambda x: x['Total_PR']) # Catcher Julio
+                                match = min(julios, key=lambda x: x['Total_PR'])
                             else:
-                                match = max(julios, key=lambda x: x['Total_PR']) # OF Julio
+                                match = max(julios, key=lambda x: x['Total_PR'])
                             matches[ep_name] = match['playerid']
                             continue
 
-                    # 2. Pass 1: Direct Exact Match (Case-Sensitive)
                     exact_raw = [p for p in fg_records if p['PlayerName'] == ep_name]
                     if len(exact_raw) == 1:
                         matches[ep_name] = exact_raw[0]['playerid']
                         continue
                         
-                    # 3. Pass 2: Exact Normalized Match
                     exact_norm = [p for p in fg_records if p['norm_name'] == ep_norm]
                     if len(exact_norm) == 1:
                         matches[ep_name] = exact_norm[0]['playerid']
                         continue
                         
-                    # 4. Pass 3: Strict Fuzzy Match (Cutoff elevated to 85% to prevent bad guesses)
                     closest = difflib.get_close_matches(ep_norm, fg_names_list, n=1, cutoff=0.85)
                     if closest:
                         best_fg = fg_names_map[closest[0]]
                         matches[ep_name] = best_fg['playerid']
                     else:
-                        # 5. Fallback: Manual Review Queue
                         guesses = difflib.get_close_matches(ep_norm, fg_names_list, n=5, cutoff=0.5)
                         guess_real_names = [fg_names_map[g]['PlayerName'] for g in guesses]
                         unmatched.append({
@@ -434,6 +468,16 @@ if st.session_state.step >= 3:
             with st.spinner("Building Final Merged Database..."):
                 output = io.BytesIO()
                 
+                # Dynamic columns depending on what was fetched
+                if player_type == "Combined":
+                    export_stats = ['R', 'HR', 'RBI', 'SB', 'OBP', 'SLG', 'W', 'QS', 'SO', 'ERA', 'WHIP', 'SVHLD']
+                elif player_type == "Batters":
+                    export_stats = ['R', 'HR', 'RBI', 'SB', 'OBP', 'SLG']
+                else:
+                    export_stats = ['W', 'QS', 'SO', 'ERA', 'WHIP', 'SVHLD']
+                    
+                cols_to_pull = export_stats + [f"PR_{s}" for s in export_stats] + ['Total_PR']
+
                 def merge_projections(dict_list):
                     merged_list = []
                     for item in dict_list:
@@ -441,8 +485,11 @@ if st.session_state.step >= 3:
                         fg_id = st.session_state.matches.get(item['ESPN_Name'])
                         if fg_id:
                             fg_row = fg_df[fg_df['playerid'] == fg_id].to_dict('records')[0]
-                            for col in stats_to_zscore + [f"PR_{s}" for s in stats_to_zscore] + ['Total_PR']:
-                                new_row[col] = fg_row.get(col, 0.0)
+                            for col in cols_to_pull:
+                                new_row[col] = fg_row.get(col, '')
+                        else:
+                            for col in cols_to_pull:
+                                new_row[col] = ''
                         merged_list.append(new_row)
                     return pd.DataFrame(merged_list)
 
@@ -454,12 +501,17 @@ if st.session_state.step >= 3:
                         auto_adjust_column_width(writer, group, clean_sheet)
 
                     df_fa = merge_projections(st.session_state.espn_fa)
-                    if 'Total_PR' in df_fa.columns: df_fa = df_fa.sort_values(by='Total_PR', ascending=False)
+                    if 'Total_PR' in df_fa.columns: 
+                        # Temporarily replace blank strings with -999 for sorting purposes, then revert back
+                        df_fa['Total_PR_Sort'] = pd.to_numeric(df_fa['Total_PR'].replace('', -999), errors='coerce')
+                        df_fa = df_fa.sort_values(by='Total_PR_Sort', ascending=False).drop(columns=['Total_PR_Sort'])
                     df_fa.to_excel(writer, sheet_name="Top Free Agents", index=False)
                     auto_adjust_column_width(writer, df_fa, "Top Free Agents")
 
                     df_master = merge_projections(st.session_state.master_list)
-                    if 'Total_PR' in df_master.columns: df_master = df_master.sort_values(by='Total_PR', ascending=False)
+                    if 'Total_PR' in df_master.columns:
+                        df_master['Total_PR_Sort'] = pd.to_numeric(df_master['Total_PR'].replace('', -999), errors='coerce')
+                        df_master = df_master.sort_values(by='Total_PR_Sort', ascending=False).drop(columns=['Total_PR_Sort'])
                     df_master.to_excel(writer, sheet_name="Master League List", index=False)
                     auto_adjust_column_width(writer, df_master, "Master League List")
 
@@ -468,7 +520,7 @@ if st.session_state.step >= 3:
 
     if 'final_excel_data' in st.session_state:
         st.download_button(
-            label="📥 Download ESPN Merged Export",
+            label="📥 Download Ultimate ESPN Merged Export",
             data=st.session_state.final_excel_data,
             file_name=f"Fantasy_Rosters_With_Projections_{year}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
