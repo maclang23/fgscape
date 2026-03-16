@@ -6,9 +6,8 @@ import traceback
 import unicodedata
 import re
 import difflib
-from espn_api.baseball import League
-import openpyxl
 from openpyxl.utils import get_column_letter
+from espn_api.baseball import League
 
 st.set_page_config(page_title="MLB Roster Exporter", page_icon="⚾", layout="wide")
 st.title("⚾ Ultimate Fantasy Baseball Scraper & Merger")
@@ -36,9 +35,7 @@ if 'matches' not in st.session_state:
 # --- HELPER FUNCTIONS ---
 def auto_adjust_column_width(writer, df, sheet_name):
     worksheet = writer.sheets[sheet_name]
-    # Enumerate starting at 1, because openpyxl uses 1-based indexing for columns
     for col_idx, column in enumerate(df.columns, 1): 
-        # Calculate max width of the data or the header, capped at 50 so it doesn't get ridiculously wide
         column_width = max(df[column].astype(str).map(len).max(), len(str(column)))
         worksheet.column_dimensions[get_column_letter(col_idx)].width = min(column_width + 2, 50)
 
@@ -137,7 +134,6 @@ if st.button("🚀 Scrape FanGraphs", type="primary" if st.session_state.step ==
     else:
         status_text = st.empty()
         
-        # Determine which datasets to pull
         modes_to_run = ['bat', 'pit'] if player_type == "Combined" else (['bat'] if player_type == "Batters" else ['pit'])
         all_dfs_by_mode = {'bat': {}, 'pit': {}}
         
@@ -163,7 +159,7 @@ if st.button("🚀 Scrape FanGraphs", type="primary" if st.session_state.step ==
 
             for proj in active_projections:
                 if mode == 'pit' and proj in ['zips', 'zipsdc']:
-                    continue # Skip for pitchers
+                    continue 
                 
                 status_text.info(f"⏳ Fetching {mode_display} data from {proj.upper()}...")
                 url = "https://www.fangraphs.com/api/projections"
@@ -235,7 +231,6 @@ if st.button("🚀 Scrape FanGraphs", type="primary" if st.session_state.step ==
                 except Exception as e:
                     st.error(f"Error fetching {proj} for {mode_display}: {e}")
 
-            # Build Consensus strictly for this mode
             if all_raw_data_mode:
                 combined_df = pd.concat(all_raw_data_mode)
                 agg_rules = {stat: 'mean' for stat in stats_to_zscore}
@@ -277,7 +272,7 @@ if st.button("🚀 Scrape FanGraphs", type="primary" if st.session_state.step ==
             
             if pieces:
                 merged = pd.concat(pieces, ignore_index=True)
-                merged = merged.fillna('') # Fills missing stats with blanks for clean Excel
+                merged = merged.fillna('')
                 if 'Total_PR' in merged.columns:
                     merged = merged.sort_values(by='Total_PR', ascending=False)
                 dfs_to_save[k] = merged
@@ -391,15 +386,20 @@ if st.session_state.consensus_df is not None:
                     ep_norm = normalize_name(ep_name)
                     ep_team = ep['Pro Team']
                     
+                    # --- REVISED JULIO RODRIGUEZ LOGIC ---
                     if "julio rodriguez" in ep_norm and ep_team == "SEA":
                         julios = [p for p in fg_records if "julio rodriguez" in p['norm_name']]
-                        if julios:
+                        if len(julios) > 1:
                             if 'C' in ep['Eligible Positions']:
                                 match = min(julios, key=lambda x: x['Total_PR'])
                             else:
                                 match = max(julios, key=lambda x: x['Total_PR'])
                             matches[ep_name] = match['playerid']
-                            continue
+                        elif len(julios) == 1:
+                            # If FanGraphs only gave us one Julio, ensure we don't accidentally match the Catcher to it
+                            if 'C' not in ep['Eligible Positions']:
+                                matches[ep_name] = julios[0]['playerid']
+                        continue
 
                     exact_raw = [p for p in fg_records if p['PlayerName'] == ep_name]
                     if len(exact_raw) == 1:
@@ -415,9 +415,6 @@ if st.session_state.consensus_df is not None:
                     if closest:
                         best_fg = fg_names_map[closest[0]]
                         matches[ep_name] = best_fg['playerid']
-                    
-                    # NOTE: Unmatched players are now intentionally skipped and left out of 'matches'.
-                    # They will gracefully receive blank stats during the export phase.
 
                 st.session_state.matches = matches
                 st.session_state.step = 3
@@ -440,7 +437,6 @@ if st.session_state.step >= 3:
         with st.spinner("Building Final Merged Database..."):
             output = io.BytesIO()
             
-            # Dynamic columns depending on what was fetched
             if player_type == "Combined":
                 export_stats = ['R', 'HR', 'RBI', 'SB', 'OBP', 'SLG', 'W', 'QS', 'SO', 'ERA', 'WHIP', 'SVHLD']
             elif player_type == "Batters":
@@ -448,7 +444,8 @@ if st.session_state.step >= 3:
             else:
                 export_stats = ['W', 'QS', 'SO', 'ERA', 'WHIP', 'SVHLD']
                 
-            cols_to_pull = export_stats + [f"PR_{s}" for s in export_stats] + ['Total_PR']
+            # --- MOVED TOTAL_PR TO THE FRONT OF THE STATS ---
+            cols_to_pull = ['Total_PR'] + export_stats + [f"PR_{s}" for s in export_stats]
 
             def merge_projections(dict_list):
                 merged_list = []
@@ -460,7 +457,6 @@ if st.session_state.step >= 3:
                         for col in cols_to_pull:
                             new_row[col] = fg_row.get(col, '')
                     else:
-                        # Player is unmatched (likely a prospect), assign blanks
                         for col in cols_to_pull:
                             new_row[col] = ''
                     merged_list.append(new_row)
@@ -475,7 +471,6 @@ if st.session_state.step >= 3:
 
                 df_fa = merge_projections(st.session_state.espn_fa)
                 if 'Total_PR' in df_fa.columns: 
-                    # Temporarily replace blank strings with -999 for sorting purposes, then revert back
                     df_fa['Total_PR_Sort'] = pd.to_numeric(df_fa['Total_PR'].replace('', -999), errors='coerce')
                     df_fa = df_fa.sort_values(by='Total_PR_Sort', ascending=False).drop(columns=['Total_PR_Sort'])
                 df_fa.to_excel(writer, sheet_name="Top Free Agents", index=False)
