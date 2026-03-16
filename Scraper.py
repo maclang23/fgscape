@@ -9,7 +9,7 @@ import difflib
 from espn_api.baseball import League
 
 st.set_page_config(page_title="MLB Roster Exporter", page_icon="⚾", layout="wide")
-st.title("⚾ Fantasy Baseball Projection Scraper & Merger")
+st.title("⚾ Ultimate Fantasy Baseball Scraper & Merger")
 
 # --- INITIALIZE SESSION STATE ---
 if 'step' not in st.session_state:
@@ -43,22 +43,34 @@ def normalize_name(name):
     name = name.replace(' jr', '').replace(' sr', '').replace(' ii', '').replace(' iii', '')
     return name
 
-# --- SIDEBAR: SETTINGS ---
-with st.sidebar:
-    st.header("1. FanGraphs Settings")
+# ==========================================
+# CONFIGURATION SETTINGS
+# ==========================================
+st.header("⚙️ Configuration")
+
+# --- FanGraphs Settings ---
+st.subheader("1. FanGraphs Settings")
+col1, col2, col3 = st.columns(3)
+with col1:
     player_type = st.radio("Player Type:", ["Batters", "Pitchers"], horizontal=True)
     is_pitcher = player_type == "Pitchers"
+with col2:
     num_players = st.number_input("Players to Return:", min_value=10, max_value=1000, value=400, step=10)
+with col3:
     min_systems = st.number_input("Min Systems for Consensus:", min_value=1, max_value=8, value=2)
 
-    st.subheader("Projection Systems")
+st.markdown("**Projection Systems**")
+pc1, pc2, pc3, pc4 = st.columns(4)
+with pc1:
     use_steamer = st.checkbox("Steamer", value=True)
     use_fangraphsdc = st.checkbox("FanGraphs DC", value=True)
+with pc2:
     use_thebat = st.checkbox("THE BAT", value=True)
     use_thebatx = st.checkbox("THE BAT X", value=True)
+with pc3:
     use_atc = st.checkbox("ATC", value=True)
     use_oopsy = st.checkbox("OOPSY", value=True)
-    
+with pc4:
     if is_pitcher:
         use_zips = st.checkbox("ZiPS", value=False, disabled=True)
         use_zipsdc = st.checkbox("ZiPS DC", value=False, disabled=True)
@@ -66,23 +78,38 @@ with st.sidebar:
         use_zips = st.checkbox("ZiPS", value=True)
         use_zipsdc = st.checkbox("ZiPS DC", value=True)
 
-    st.divider()
-    
-    st.header("2. ESPN Settings")
-    has_secrets = "SWID" in st.secrets and "ESPN_S2" in st.secrets
-    use_defaults = st.checkbox("Use System Credentials", value=has_secrets)
+if is_pitcher:
+    st.caption("⚠️ *ZiPS and ZiPS DC do not project Quality Starts (QS) and are disabled for Pitchers.*")
 
-    if use_defaults and has_secrets:
-        league_id = int(st.secrets.get("LEAGUE_ID", 11440))
-        swid = st.secrets.get("SWID")
-        espn_s2 = st.secrets.get("ESPN_S2")
-        st.success("🔒 Using hidden system keys.")
-    else:
-        league_id = st.number_input("League ID", value=11440)
-        swid = st.text_input("SWID", type="password")
-        espn_s2 = st.text_input("ESPN_S2", type="password")
+# --- ESPN Settings ---
+st.subheader("2. ESPN Settings")
+has_secrets = "SWID" in st.secrets and "ESPN_S2" in st.secrets
+
+ecol_top, _ = st.columns([1, 2])
+with ecol_top:
+    use_defaults = st.checkbox("Use System Credentials (Secrets)", value=has_secrets)
+
+ecol1, ecol2, ecol3, ecol4 = st.columns(4)
+with ecol1:
     year = st.number_input("Year", value=2026)
 
+if use_defaults and has_secrets:
+    with ecol2:
+        st.info("🔒 Using hidden system keys.")
+    league_id = int(st.secrets.get("LEAGUE_ID", 11440))
+    swid = st.secrets.get("SWID")
+    espn_s2 = st.secrets.get("ESPN_S2")
+else:
+    with ecol2:
+        league_id = st.number_input("League ID", value=11440)
+    with ecol3:
+        swid = st.text_input("SWID", type="password")
+    with ecol4:
+        espn_s2 = st.text_input("ESPN_S2", type="password")
+
+st.divider()
+
+# --- Logic Maps ---
 proj_map = {
     'steamer': use_steamer, 'fangraphsdc': use_fangraphsdc, 
     'thebat': use_thebat, 'thebatx': use_thebatx, 
