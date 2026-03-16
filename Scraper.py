@@ -8,6 +8,7 @@ import re
 import difflib
 from espn_api.baseball import League
 import openpyxl
+from openpyxl.utils import get_column_letter
 
 st.set_page_config(page_title="MLB Roster Exporter", page_icon="⚾", layout="wide")
 st.title("⚾ Ultimate Fantasy Baseball Scraper & Merger")
@@ -35,9 +36,11 @@ if 'matches' not in st.session_state:
 # --- HELPER FUNCTIONS ---
 def auto_adjust_column_width(writer, df, sheet_name):
     worksheet = writer.sheets[sheet_name]
-    for col_idx, column in enumerate(df.columns):
-        column_width = max(df[column].astype(str).map(len).max(), len(column))
-        worksheet.column_dimensions[chr(65 + col_idx)].width = column_width + 2
+    # Enumerate starting at 1, because openpyxl uses 1-based indexing for columns
+    for col_idx, column in enumerate(df.columns, 1): 
+        # Calculate max width of the data or the header, capped at 50 so it doesn't get ridiculously wide
+        column_width = max(df[column].astype(str).map(len).max(), len(str(column)))
+        worksheet.column_dimensions[get_column_letter(col_idx)].width = min(column_width + 2, 50)
 
 def normalize_name(name):
     """Removes accents, punctuation, and suffixes to improve matching."""
