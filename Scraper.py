@@ -7,6 +7,7 @@ import unicodedata
 import re
 import difflib
 from espn_api.baseball import League
+import openpyxl
 
 st.set_page_config(page_title="MLB Roster Exporter", page_icon="⚾", layout="wide")
 st.title("⚾ Ultimate Fantasy Baseball Scraper & Merger")
