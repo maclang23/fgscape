@@ -10,7 +10,7 @@ from openpyxl.utils import get_column_letter
 from espn_api.baseball import League
 
 st.set_page_config(page_title="MLB Roster Exporter", page_icon="⚾", layout="wide")
-st.title("⚾ Ultimate Fantasy Baseball Scraper & Merger")
+st.title("⚾ Fantasy Baseball Scraper & Merger")
 
 # --- INITIALIZE SESSION STATE ---
 if 'step' not in st.session_state:
@@ -128,7 +128,7 @@ active_projections = [proj for proj, is_active in proj_map.items() if is_active]
 # ==========================================
 st.header("Step 1: Get Projections")
 
-if st.button("🚀 Scrape FanGraphs", type="primary" if st.session_state.step == 1 else "secondary"):
+if st.button("Scrape FanGraphs", type="primary" if st.session_state.step == 1 else "secondary"):
     if not active_projections:
         st.error("Select at least one projection system.")
     else:
@@ -304,7 +304,7 @@ if st.button("🚀 Scrape FanGraphs", type="primary" if st.session_state.step ==
 
 # --- Show Step 1 Results & Download ---
 if st.session_state.raw_preview_df is not None:
-    st.subheader(f"👀 {st.session_state.raw_preview_title}")
+    st.subheader(f"{st.session_state.raw_preview_title}")
     st.dataframe(st.session_state.raw_preview_df, use_container_width=True, hide_index=True)
     
 if st.session_state.raw_excel_data is not None:
@@ -322,7 +322,7 @@ st.divider()
 st.header("Step 2: Sync ESPN & Match Players")
 
 if st.session_state.consensus_df is not None:
-    if st.button("📡 Pull ESPN Rosters & Auto-Match", type="primary" if st.session_state.step == 2 else "secondary"):
+    if st.button("Pull ESPN Rosters & Auto-Match", type="primary" if st.session_state.step == 2 else "secondary"):
         try:
             with st.spinner("Connecting to ESPN..."):
                 league = League(league_id=league_id, year=year, espn_s2=espn_s2, swid=swid)
@@ -371,7 +371,7 @@ if st.session_state.consensus_df is not None:
                 st.session_state.espn_fa = espn_fa
                 st.session_state.master_list = master_list
 
-            with st.spinner("Executing Intelligent Matching..."):
+            with st.spinner("Utilizing Matching Algorithim..."):
                 fg_df = st.session_state.consensus_df
                 fg_records = fg_df.to_dict('records')
                 for p in fg_records: p['norm_name'] = normalize_name(p['PlayerName'])
@@ -418,7 +418,7 @@ if st.session_state.consensus_df is not None:
 
                 st.session_state.matches = matches
                 st.session_state.step = 3
-                st.success(f"✅ Auto-matched {len(matches)} players out of {len(master_list)}. Unmatched prospects will receive blank projections. Scroll down to export.")
+                st.success(f"Auto-matched {len(matches)} players out of {len(master_list)}. Unmatched prospects will receive blank projections. Scroll down to export.")
 
         except Exception as e:
             st.error("Error connecting to ESPN.")
@@ -484,11 +484,10 @@ if st.session_state.step >= 3:
                 auto_adjust_column_width(writer, df_master, "Master League List")
 
             st.session_state.final_excel_data = output.getvalue()
-            st.balloons()
 
     if 'final_excel_data' in st.session_state:
         st.download_button(
-            label="📥 Download Ultimate ESPN Merged Export",
+            label="📥 Download ESPN Merged Projection Export",
             data=st.session_state.final_excel_data,
             file_name=f"Fantasy_Rosters_With_Projections_{year}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
