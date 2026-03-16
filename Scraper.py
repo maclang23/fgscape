@@ -30,8 +30,6 @@ if 'master_list' not in st.session_state:
     st.session_state.master_list = []
 if 'matches' not in st.session_state:
     st.session_state.matches = {}
-if 'unmatched' not in st.session_state:
-    st.session_state.unmatched = []
 
 # --- HELPER FUNCTIONS ---
 def auto_adjust_column_width(writer, df, sheet_name):
@@ -275,7 +273,7 @@ if st.button("🚀 Scrape FanGraphs", type="primary" if st.session_state.step ==
             
             if pieces:
                 merged = pd.concat(pieces, ignore_index=True)
-                merged = merged.fillna('') # Fills missing stats (e.g., Pitcher HRs) with blanks for clean Excel
+                merged = merged.fillna('') # Fills missing stats with blanks for clean Excel
                 if 'Total_PR' in merged.columns:
                     merged = merged.sort_values(by='Total_PR', ascending=False)
                 dfs_to_save[k] = merged
@@ -383,7 +381,6 @@ if st.session_state.consensus_df is not None:
                 fg_names_map = {p['norm_name']: p for p in fg_records}
                 
                 matches = {}
-                unmatched = []
                 
                 for ep in master_list:
                     ep_name = ep['ESPN_Name']
@@ -414,109 +411,81 @@ if st.session_state.consensus_df is not None:
                     if closest:
                         best_fg = fg_names_map[closest[0]]
                         matches[ep_name] = best_fg['playerid']
-                    else:
-                        guesses = difflib.get_close_matches(ep_norm, fg_names_list, n=5, cutoff=0.5)
-                        guess_real_names = [fg_names_map[g]['PlayerName'] for g in guesses]
-                        unmatched.append({
-                            "espn_name": ep_name,
-                            "team": ep_team,
-                            "guesses": guess_real_names + ["Skip/Leave Blank"]
-                        })
+                    
+                    # NOTE: Unmatched players are now intentionally skipped and left out of 'matches'.
+                    # They will gracefully receive blank stats during the export phase.
 
                 st.session_state.matches = matches
-                st.session_state.unmatched = unmatched
                 st.session_state.step = 3
-                st.success("✅ Matching Complete! Scroll down to review and export.")
+                st.success(f"✅ Auto-matched {len(matches)} players out of {len(master_list)}. Unmatched prospects will receive blank projections. Scroll down to export.")
 
         except Exception as e:
             st.error("Error connecting to ESPN.")
             st.code(traceback.format_exc())
 
 # ==========================================
-# STEP 3: MANUAL REVIEW & EXPORT
+# STEP 3: EXPORT
 # ==========================================
 if st.session_state.step >= 3:
     st.divider()
-    st.header("Step 3: Resolve Unmatched & Export")
+    st.header("Step 3: Export Final Database")
     
     fg_df = st.session_state.consensus_df
     
-    if st.session_state.unmatched:
-        st.warning(f"⚠️ {len(st.session_state.unmatched)} players could not be auto-matched perfectly. Please confirm closest guesses below:")
-        
-        with st.form("manual_match_form"):
-            manual_selections = {}
-            for item in st.session_state.unmatched:
-                st.markdown(f"**ESPN:** {item['espn_name']} ({item['team']})")
-                sel = st.selectbox("Map to FanGraphs Player:", options=item['guesses'], key=f"sel_{item['espn_name']}")
-                manual_selections[item['espn_name']] = sel
-                st.write("---")
+    if st.button("💾 Generate ESPN Merged Excel File", type="primary"):
+        with st.spinner("Building Final Merged Database..."):
+            output = io.BytesIO()
             
-            submitted = st.form_submit_button("Confirm Matches & Build Excel")
-            
-            if submitted:
-                for espn_name, fg_choice in manual_selections.items():
-                    if fg_choice != "Skip/Leave Blank":
-                        fg_id = fg_df[fg_df['PlayerName'] == fg_choice]['playerid'].values[0]
-                        st.session_state.matches[espn_name] = fg_id
-                st.session_state.unmatched = [] 
-                st.rerun() 
-    else:
-        st.success("🎉 All ESPN players have been accounted for!")
-        
-        if st.button("💾 Generate ESPN Merged Excel File", type="primary"):
-            with st.spinner("Building Final Merged Database..."):
-                output = io.BytesIO()
+            # Dynamic columns depending on what was fetched
+            if player_type == "Combined":
+                export_stats = ['R', 'HR', 'RBI', 'SB', 'OBP', 'SLG', 'W', 'QS', 'SO', 'ERA', 'WHIP', 'SVHLD']
+            elif player_type == "Batters":
+                export_stats = ['R', 'HR', 'RBI', 'SB', 'OBP', 'SLG']
+            else:
+                export_stats = ['W', 'QS', 'SO', 'ERA', 'WHIP', 'SVHLD']
                 
-                # Dynamic columns depending on what was fetched
-                if player_type == "Combined":
-                    export_stats = ['R', 'HR', 'RBI', 'SB', 'OBP', 'SLG', 'W', 'QS', 'SO', 'ERA', 'WHIP', 'SVHLD']
-                elif player_type == "Batters":
-                    export_stats = ['R', 'HR', 'RBI', 'SB', 'OBP', 'SLG']
-                else:
-                    export_stats = ['W', 'QS', 'SO', 'ERA', 'WHIP', 'SVHLD']
-                    
-                cols_to_pull = export_stats + [f"PR_{s}" for s in export_stats] + ['Total_PR']
+            cols_to_pull = export_stats + [f"PR_{s}" for s in export_stats] + ['Total_PR']
 
-                def merge_projections(dict_list):
-                    merged_list = []
-                    for item in dict_list:
-                        new_row = item.copy()
-                        fg_id = st.session_state.matches.get(item['ESPN_Name'])
-                        if fg_id:
-                            fg_row = fg_df[fg_df['playerid'] == fg_id].to_dict('records')[0]
-                            for col in cols_to_pull:
-                                new_row[col] = fg_row.get(col, '')
-                        else:
-                            for col in cols_to_pull:
-                                new_row[col] = ''
-                        merged_list.append(new_row)
-                    return pd.DataFrame(merged_list)
+            def merge_projections(dict_list):
+                merged_list = []
+                for item in dict_list:
+                    new_row = item.copy()
+                    fg_id = st.session_state.matches.get(item['ESPN_Name'])
+                    if fg_id:
+                        fg_row = fg_df[fg_df['playerid'] == fg_id].to_dict('records')[0]
+                        for col in cols_to_pull:
+                            new_row[col] = fg_row.get(col, '')
+                    else:
+                        # Player is unmatched (likely a prospect), assign blanks
+                        for col in cols_to_pull:
+                            new_row[col] = ''
+                    merged_list.append(new_row)
+                return pd.DataFrame(merged_list)
 
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    df_all_rosters = merge_projections(st.session_state.espn_rosters)
-                    for team_name, group in df_all_rosters.groupby("Fantasy Team"):
-                        clean_sheet = re.sub(r'[\\/*?:\[\]]', '', team_name)[:31]
-                        group.to_excel(writer, sheet_name=clean_sheet, index=False)
-                        auto_adjust_column_width(writer, group, clean_sheet)
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                df_all_rosters = merge_projections(st.session_state.espn_rosters)
+                for team_name, group in df_all_rosters.groupby("Fantasy Team"):
+                    clean_sheet = re.sub(r'[\\/*?:\[\]]', '', team_name)[:31]
+                    group.to_excel(writer, sheet_name=clean_sheet, index=False)
+                    auto_adjust_column_width(writer, group, clean_sheet)
 
-                    df_fa = merge_projections(st.session_state.espn_fa)
-                    if 'Total_PR' in df_fa.columns: 
-                        # Temporarily replace blank strings with -999 for sorting purposes, then revert back
-                        df_fa['Total_PR_Sort'] = pd.to_numeric(df_fa['Total_PR'].replace('', -999), errors='coerce')
-                        df_fa = df_fa.sort_values(by='Total_PR_Sort', ascending=False).drop(columns=['Total_PR_Sort'])
-                    df_fa.to_excel(writer, sheet_name="Top Free Agents", index=False)
-                    auto_adjust_column_width(writer, df_fa, "Top Free Agents")
+                df_fa = merge_projections(st.session_state.espn_fa)
+                if 'Total_PR' in df_fa.columns: 
+                    # Temporarily replace blank strings with -999 for sorting purposes, then revert back
+                    df_fa['Total_PR_Sort'] = pd.to_numeric(df_fa['Total_PR'].replace('', -999), errors='coerce')
+                    df_fa = df_fa.sort_values(by='Total_PR_Sort', ascending=False).drop(columns=['Total_PR_Sort'])
+                df_fa.to_excel(writer, sheet_name="Top Free Agents", index=False)
+                auto_adjust_column_width(writer, df_fa, "Top Free Agents")
 
-                    df_master = merge_projections(st.session_state.master_list)
-                    if 'Total_PR' in df_master.columns:
-                        df_master['Total_PR_Sort'] = pd.to_numeric(df_master['Total_PR'].replace('', -999), errors='coerce')
-                        df_master = df_master.sort_values(by='Total_PR_Sort', ascending=False).drop(columns=['Total_PR_Sort'])
-                    df_master.to_excel(writer, sheet_name="Master League List", index=False)
-                    auto_adjust_column_width(writer, df_master, "Master League List")
+                df_master = merge_projections(st.session_state.master_list)
+                if 'Total_PR' in df_master.columns:
+                    df_master['Total_PR_Sort'] = pd.to_numeric(df_master['Total_PR'].replace('', -999), errors='coerce')
+                    df_master = df_master.sort_values(by='Total_PR_Sort', ascending=False).drop(columns=['Total_PR_Sort'])
+                df_master.to_excel(writer, sheet_name="Master League List", index=False)
+                auto_adjust_column_width(writer, df_master, "Master League List")
 
-                st.session_state.final_excel_data = output.getvalue()
-                st.balloons()
+            st.session_state.final_excel_data = output.getvalue()
+            st.balloons()
 
     if 'final_excel_data' in st.session_state:
         st.download_button(
