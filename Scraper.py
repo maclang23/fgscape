@@ -387,6 +387,8 @@ if st.session_state.consensus_df is not None:
                     ep_team = ep['Pro Team']
                     
                     # --- REVISED JULIO RODRIGUEZ LOGIC ---
+                    unique_id = f"{ep_name}_{ep['Pro Team']}_{ep['Eligible Positions']}"
+                    
                     if "julio rodriguez" in ep_norm:
                         julios = [p for p in fg_records if "julio rodriguez" in p['norm_name']]
                         if len(julios) > 1:
@@ -394,10 +396,10 @@ if st.session_state.consensus_df is not None:
                                 match = min(julios, key=lambda x: x['Total_PR'])
                             else:
                                 match = max(julios, key=lambda x: x['Total_PR'])
-                            matches[ep_name] = match['playerid']
+                            matches[unique_id] = match['playerid']
                         elif len(julios) == 1:
                             if 'C' not in ep['Eligible Positions']:
-                                matches[ep_name] = julios[0]['playerid']
+                                matches[unique_id] = julios[0]['playerid']
                         continue
 
                     exact_raw = [p for p in fg_records if p['PlayerName'] == ep_name]
