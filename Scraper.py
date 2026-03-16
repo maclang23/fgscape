@@ -387,7 +387,7 @@ if st.session_state.consensus_df is not None:
                     ep_team = ep['Pro Team']
                     
                     # --- REVISED JULIO RODRIGUEZ LOGIC ---
-                    if "julio rodriguez" in ep_norm and ep_team == "SEA":
+                    if "julio rodriguez" in ep_norm:
                         julios = [p for p in fg_records if "julio rodriguez" in p['norm_name']]
                         if len(julios) > 1:
                             if 'C' in ep['Eligible Positions']:
@@ -396,7 +396,6 @@ if st.session_state.consensus_df is not None:
                                 match = max(julios, key=lambda x: x['Total_PR'])
                             matches[ep_name] = match['playerid']
                         elif len(julios) == 1:
-                            # If FanGraphs only gave us one Julio, ensure we don't accidentally match the Catcher to it
                             if 'C' not in ep['Eligible Positions']:
                                 matches[ep_name] = julios[0]['playerid']
                         continue
