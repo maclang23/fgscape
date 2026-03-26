@@ -1,5 +1,4 @@
 import streamlit as st
-import cloudscraper
 import pandas as pd
 import io
 import traceback
@@ -9,6 +8,7 @@ import difflib
 import time
 import random
 from openpyxl.utils import get_column_letter
+from curl_cffi import requests as curl_requests
 from espn_api.baseball import League
 
 st.set_page_config(page_title="MLB Roster Exporter", page_icon="⚾", layout="wide")
@@ -136,22 +136,18 @@ if st.button("🚀 Scrape FanGraphs", type="primary" if st.session_state.step ==
         modes_to_run = ['bat', 'pit'] if player_type == "Combined" else (['bat'] if player_type == "Batters" else ['pit'])
         all_dfs_by_mode = {'bat': {}, 'pit': {}}
         
-        # --- THE CLOUDFLARE BYPASS (WARM UP SESSION) ---
-        status_text.info("⏳ Warming up secure connection to FanGraphs...")
-        scraper = cloudscraper.create_scraper(
-            browser={
-                'browser': 'chrome',
-                'platform': 'windows',
-                'desktop': True
-            }
-        )
+        # --- THE ULTIMATE CLOUDFLARE BYPASS ---
+        status_text.info("⏳ Warming up TLS-impersonated connection to FanGraphs...")
+        
+        # We explicitly impersonate Chrome 110's internal network stack
+        session = curl_requests.Session(impersonate="chrome110")
         
         try:
-            # Hit the main page first to grab the Cloudflare clearance cookies
-            scraper.get("https://www.fangraphs.com/projections", timeout=15)
-            time.sleep(2)
+            # Hit the main page first to grab the Cloudflare clearance cookies naturally
+            session.get("https://www.fangraphs.com/projections", timeout=15)
+            time.sleep(1.5)
         except Exception as e:
-            pass # If the warm-up fails, we'll still try the API directly
+            pass 
 
         headers = {
             "Accept": "application/json, text/plain, */*",
@@ -183,9 +179,9 @@ if st.button("🚀 Scrape FanGraphs", type="primary" if st.session_state.step ==
                 params = {"type": proj, "stats": mode, "pos": "all", "team": "0", "players": "0", "lg": "all", "statgroup": "fantasy", "fantasypreset": "classic"}
                 
                 try:
-                    # Random human-like delay between 2 and 4 seconds
-                    time.sleep(random.uniform(2.0, 4.0)) 
-                    response = scraper.get(url, params=params, headers=headers, timeout=20)
+                    time.sleep(random.uniform(1.5, 3.0)) 
+                    # Use our bulletproof session
+                    response = session.get(url, params=params, headers=headers, timeout=20)
                     response.raise_for_status()
                     data = response.json()
                     
