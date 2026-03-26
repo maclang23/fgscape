@@ -136,25 +136,37 @@ if st.button("🚀 Scrape FanGraphs", type="primary" if st.session_state.step ==
         modes_to_run = ['bat', 'pit'] if player_type == "Combined" else (['bat'] if player_type == "Batters" else ['pit'])
         all_dfs_by_mode = {'bat': {}, 'pit': {}}
         
-        # --- THE ULTIMATE CLOUDFLARE BYPASS ---
-        status_text.info("⏳ Warming up TLS-impersonated connection to FanGraphs...")
-        
-        # We explicitly impersonate Chrome 110's internal network stack
-        session = curl_requests.Session(impersonate="chrome110")
-        
-        try:
-            # Hit the main page first to grab the Cloudflare clearance cookies naturally
-            session.get("https://www.fangraphs.com/projections", timeout=15)
-            time.sleep(1.5)
-        except Exception as e:
-            pass 
-
-        headers = {
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Referer": "https://www.fangraphs.com/projections",
-            "Origin": "https://www.fangraphs.com"
-        }
+        # --- ROBUST FETCH FUNCTION WITH IMPERSONATION ROULETTE ---
+        def fetch_projection_data(proj_type, stat_mode):
+            url = "https://www.fangraphs.com/api/projections"
+            # Stripped down parameters to look less automated
+            params = {"type": proj_type, "stats": stat_mode, "pos": "all", "lg": "all"}
+            
+            # Try different browser impersonations if one gets blocked
+            browsers_to_try = ["safari15_5", "chrome120", "edge116"]
+            
+            for browser in browsers_to_try:
+                try:
+                    session = curl_requests.Session(impersonate=browser)
+                    session.headers.update({
+                        "Accept": "application/json",
+                        "Referer": "https://www.fangraphs.com/projections"
+                    })
+                    
+                    # Gentle session warm-up
+                    session.get("https://www.fangraphs.com/projections", timeout=10)
+                    time.sleep(random.uniform(1.0, 2.0))
+                    
+                    response = session.get(url, params=params, timeout=15)
+                    
+                    if response.status_code == 200:
+                        return response.json()
+                        
+                except Exception:
+                    time.sleep(1)
+                    continue # Try the next browser
+                    
+            return None # All attempts failed
 
         for mode in modes_to_run:
             mode_display = "Batters" if mode == 'bat' else "Pitchers"
@@ -175,16 +187,14 @@ if st.button("🚀 Scrape FanGraphs", type="primary" if st.session_state.step ==
                     continue 
                 
                 status_text.info(f"⏳ Fetching {mode_display} data from {proj.upper()}...")
-                url = "https://www.fangraphs.com/api/projections"
-                params = {"type": proj, "stats": mode, "pos": "all", "team": "0", "players": "0", "lg": "all", "statgroup": "fantasy", "fantasypreset": "classic"}
                 
                 try:
-                    time.sleep(random.uniform(1.5, 3.0)) 
-                    # Use our bulletproof session
-                    response = session.get(url, params=params, headers=headers, timeout=20)
-                    response.raise_for_status()
-                    data = response.json()
+                    data = fetch_projection_data(proj, mode)
                     
+                    if data is None:
+                        st.error(f"🛑 Error fetching {proj.upper()} for {mode_display}: Blocked by FanGraphs Security.")
+                        continue
+                        
                     player_data = data.get('data', []) if isinstance(data, dict) else data
                     if not player_data: continue
                         
@@ -315,7 +325,7 @@ if st.button("🚀 Scrape FanGraphs", type="primary" if st.session_state.step ==
             st.session_state.step = 2
             status_text.success("✅ FanGraphs Projections Loaded! Download raw data below, or proceed to Step 2.")
         else:
-            status_text.error("Failed to scrape FanGraphs data.")
+            status_text.error("Failed to scrape FanGraphs data. FanGraphs may be temporarily blocking all automated traffic from your network.")
 
 # --- Show Step 1 Results & Download ---
 if st.session_state.raw_preview_df is not None:
