@@ -4,3 +4,4 @@ pandas
 openpyxl
 defusedxml
 espn-api
+cloudscraper
