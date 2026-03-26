@@ -5,3 +5,4 @@ openpyxl
 defusedxml
 espn-api
 cloudscraper
+curl-cffi
